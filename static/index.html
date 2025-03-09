@@ -23,7 +23,8 @@
             margin-bottom: 20px;
         }
 
-        .status-indicator {
+        .status-indicator,
+        .sync-status-indicator {
             display: inline-block;
             width: 10px;
             height: 10px;
@@ -61,12 +62,14 @@
             margin-right: 5px;
         }
 
-        .status-value {
+        .status-value,
+        .sync-error-message {
             font-family: monospace;
             word-break: break-all;
         }
 
-        .status-row {
+        .status-row,
+        .sync-error-container {
             margin-bottom: 10px;
             padding-bottom: 10px;
             border-bottom: 1px solid #eee;
@@ -193,7 +196,9 @@
             font-size: 14px;
         }
 
-        .sync-info-value {
+        .sync-info-value,
+        .last-sync-value,
+        .next-sync-value {
             font-family: monospace;
             background: #f5f5f5;
             padding: 8px;
@@ -299,13 +304,13 @@
 
             // Create status indicator
             const statusIndicator = document.createElement("span");
-            statusIndicator.className = "status-indicator";
+            statusIndicator.className = "sync-status-indicator";
             if (sync.is_syncing) {
-                statusIndicator.className = "status-indicator active syncing";
+                statusIndicator.className = "sync-status-indicator active syncing";
             } else if (sync.last_error) {
-                statusIndicator.className = "status-indicator error";
+                statusIndicator.className = "sync-status-indicator error";
             } else {
-                statusIndicator.className = "status-indicator inactive";
+                statusIndicator.className = "sync-status-indicator inactive";
             }
 
             // Create sync title
@@ -338,59 +343,121 @@
             syncDetails.className = "sync-details";
 
             // Create status text
-            const statusText = document.createElement("div");
-            statusText.className = "status-row";
-            statusText.innerHTML = `<span class="status-label">Status:</span> <span>${sync.is_syncing ? "Syncing..." : (sync.last_error ? "Error" : "Idle")}</span>`;
+            const statusRow = document.createElement("div");
+            statusRow.className = "status-row";
+
+            const statusLabel = document.createElement("span");
+            statusLabel.className = "status-label";
+            statusLabel.textContent = "Status:";
+
+            const statusText = document.createElement("span");
+            statusText.className = "sync-status-text";
+            statusText.textContent = sync.is_syncing ? "Syncing..." : (sync.last_error ? "Error" : "Idle");
+
+            statusRow.appendChild(statusLabel);
+            statusRow.appendChild(statusText);
 
             // Create path container for source
             const sourcePathContainer = document.createElement("div");
             sourcePathContainer.className = "path-container";
-            sourcePathContainer.innerHTML = `
-                <div class="path-header">Source Path:</div>
-                <div class="path-value">${sync.source_path || "-"}</div>
-            `;
+
+            const sourcePathHeader = document.createElement("div");
+            sourcePathHeader.className = "path-header";
+            sourcePathHeader.textContent = "Source Path:";
+
+            const sourcePathValue = document.createElement("div");
+            sourcePathValue.className = "path-value";
+            sourcePathValue.textContent = sync.source_path || "-";
+
+            sourcePathContainer.appendChild(sourcePathHeader);
+            sourcePathContainer.appendChild(sourcePathValue);
 
             // Create path container for destination
             const destPathContainer = document.createElement("div");
             destPathContainer.className = "path-container";
-            destPathContainer.innerHTML = `
-                <div class="path-header">Destination Path:</div>
-                <div class="path-value">${sync.destination_path || "-"}</div>
-            `;
+
+            const destPathHeader = document.createElement("div");
+            destPathHeader.className = "path-header";
+            destPathHeader.textContent = "Destination Path:";
+
+            const destPathValue = document.createElement("div");
+            destPathValue.className = "path-value";
+            destPathValue.textContent = sync.destination_path || "-";
+
+            destPathContainer.appendChild(destPathHeader);
+            destPathContainer.appendChild(destPathValue);
 
             // Create sync info
             const syncInfo = document.createElement("div");
             syncInfo.className = "sync-info";
-            syncInfo.innerHTML = `
-                <div class="sync-info-item">
-                    <div class="sync-info-label">Last Sync:</div>
-                    <div class="sync-info-value">${formatDate(sync.last_sync)}</div>
-                </div>
-                <div class="sync-info-item">
-                    <div class="sync-info-label">Next Sync:</div>
-                    <div class="sync-info-value">${formatDate(sync.next_sync_time)}</div>
-                </div>
-            `;
+
+            // Last sync info
+            const lastSyncItem = document.createElement("div");
+            lastSyncItem.className = "sync-info-item";
+
+            const lastSyncLabel = document.createElement("div");
+            lastSyncLabel.className = "sync-info-label";
+            lastSyncLabel.textContent = "Last Sync:";
+
+            const lastSyncValue = document.createElement("div");
+            lastSyncValue.className = "last-sync-value sync-info-value";
+            lastSyncValue.textContent = formatDate(sync.last_sync);
+
+            lastSyncItem.appendChild(lastSyncLabel);
+            lastSyncItem.appendChild(lastSyncValue);
+
+            // Next sync info
+            const nextSyncItem = document.createElement("div");
+            nextSyncItem.className = "sync-info-item";
+
+            const nextSyncLabel = document.createElement("div");
+            nextSyncLabel.className = "sync-info-label";
+            nextSyncLabel.textContent = "Next Sync:";
+
+            const nextSyncValue = document.createElement("div");
+            nextSyncValue.className = "next-sync-value sync-info-value";
+            nextSyncValue.textContent = formatDate(sync.next_sync_time);
+
+            nextSyncItem.appendChild(nextSyncLabel);
+            nextSyncItem.appendChild(nextSyncValue);
+
+            // Add items to sync info
+            syncInfo.appendChild(lastSyncItem);
+            syncInfo.appendChild(nextSyncItem);
 
             // Create error container
             const errorContainer = document.createElement("div");
-            errorContainer.className = "status-row";
+            errorContainer.className = "sync-error-container status-row";
             errorContainer.style.display = sync.last_error ? "block" : "none";
-            errorContainer.innerHTML = `
-                <span class="status-label">Error:</span>
-                <span class="status-value error-message">${sync.last_error || "None"}</span>
-            `;
+
+            const errorLabel = document.createElement("span");
+            errorLabel.className = "status-label";
+            errorLabel.textContent = "Error:";
+
+            const errorMessage = document.createElement("span");
+            errorMessage.className = "sync-error-message status-value error-message";
+            errorMessage.textContent = sync.last_error || "None";
+
+            errorContainer.appendChild(errorLabel);
+            errorContainer.appendChild(errorMessage);
 
             // Create status panel
             const statusPanel = document.createElement("div");
             statusPanel.className = "status-panel";
-            statusPanel.innerHTML = `
-                <div class="status-panel-title">Output</div>
-                <div class="status-output">Click "View Details" to load the latest output...</div>
-            `;
+
+            const statusPanelTitle = document.createElement("div");
+            statusPanelTitle.className = "status-panel-title";
+            statusPanelTitle.textContent = "Output";
+
+            const statusOutput = document.createElement("div");
+            statusOutput.className = "status-output";
+            statusOutput.textContent = "Click \"View Details\" to load the latest output...";
+
+            statusPanel.appendChild(statusPanelTitle);
+            statusPanel.appendChild(statusOutput);
 
             // Add elements to details
-            syncDetails.appendChild(statusText);
+            syncDetails.appendChild(statusRow);
             syncDetails.appendChild(sourcePathContainer);
             syncDetails.appendChild(destPathContainer);
             syncDetails.appendChild(syncInfo);
@@ -406,22 +473,22 @@
 
         // Update a sync item with new data
         function updateSyncItem(syncItem, sync) {
-            const statusIndicator = syncItem.querySelector(".status-indicator");
-            const statusText = syncItem.querySelector(".status-row span:last-child");
-            const lastSyncElement = syncItem.querySelector(".sync-info-item:first-child .sync-info-value");
-            const nextSyncElement = syncItem.querySelector(".sync-info-item:last-child .sync-info-value");
-            const errorContainer = syncItem.querySelector(".status-row:nth-of-type(4)");
-            const errorMessage = syncItem.querySelector(".error-message");
+            const statusIndicator = syncItem.querySelector(".sync-status-indicator");
+            const statusText = syncItem.querySelector(".sync-status-text");
+            const lastSyncElement = syncItem.querySelector(".last-sync-value");
+            const nextSyncElement = syncItem.querySelector(".next-sync-value");
+            const errorContainer = syncItem.querySelector(".sync-error-container");
+            const errorMessage = syncItem.querySelector(".sync-error-message");
 
             // Update status indicator and text
             if (sync.is_syncing) {
-                statusIndicator.className = "status-indicator active syncing";
+                statusIndicator.className = "sync-status-indicator active syncing";
                 statusText.textContent = "Syncing...";
             } else if (sync.last_error) {
-                statusIndicator.className = "status-indicator error";
+                statusIndicator.className = "sync-status-indicator error";
                 statusText.textContent = "Error";
             } else {
-                statusIndicator.className = "status-indicator inactive";
+                statusIndicator.className = "sync-status-indicator inactive";
                 statusText.textContent = "Idle";
             }
 
