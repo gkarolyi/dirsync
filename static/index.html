@@ -124,6 +124,81 @@
         .syncing {
             animation: pulse 1.5s infinite;
         }
+
+        .status-panel {
+            background: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 15px;
+        }
+
+        .status-panel-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #ddd;
+            font-size: 16px;
+        }
+
+        .path-row {
+            background-color: #f0f8ff;
+            border-radius: 4px;
+            padding: 8px;
+            margin-bottom: 10px;
+        }
+
+        .path-container {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 15px;
+        }
+
+        .path-header {
+            font-weight: bold;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .path-value {
+            font-family: monospace;
+            background: #f0f8ff;
+            padding: 8px;
+            border-radius: 4px;
+            word-break: break-all;
+        }
+
+        .sync-info {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+
+        .sync-info-item {
+            flex: 1;
+            margin-right: 10px;
+        }
+
+        .sync-info-item:last-child {
+            margin-right: 0;
+        }
+
+        .sync-info-label {
+            font-weight: bold;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .sync-info-value {
+            font-family: monospace;
+            background: #f5f5f5;
+            padding: 8px;
+            border-radius: 4px;
+        }
     </style>
 </head>
 
@@ -139,24 +214,35 @@
             <span id="statusText">Checking status...</span>
         </div>
 
-        <div class="status-row">
-            <span class="status-label">Last sync:</span>
-            <span id="lastSync" class="status-value">-</span>
+        <div class="path-container">
+            <div class="path-header">Source Path:</div>
+            <div id="sourcePath" class="path-value">-</div>
         </div>
 
-        <div class="status-row">
-            <span class="status-label">Next sync:</span>
-            <span id="nextSync" class="status-value">-</span>
+        <div class="path-container">
+            <div class="path-header">Destination Path:</div>
+            <div id="destinationPath" class="path-value">-</div>
         </div>
 
-        <div class="status-row">
-            <span class="status-label">Current pair:</span>
-            <span id="currentPair" class="status-value">-</span>
+        <div class="sync-info">
+            <div class="sync-info-item">
+                <div class="sync-info-label">Last Sync:</div>
+                <div id="lastSync" class="sync-info-value">-</div>
+            </div>
+            <div class="sync-info-item">
+                <div class="sync-info-label">Next Sync:</div>
+                <div id="nextSync" class="sync-info-value">-</div>
+            </div>
         </div>
 
-        <div class="status-row">
-            <span class="status-label">Last error:</span>
-            <span id="lastError" class="status-value">-</span>
+        <div class="status-row" id="errorContainer" style="display: none;">
+            <span class="status-label">Error:</span>
+            <span id="lastError" class="status-value error-message">-</span>
+        </div>
+
+        <div class="status-panel">
+            <div class="status-panel-title">Status</div>
+            <div id="statusOutput">Waiting for sync...</div>
         </div>
     </div>
 
@@ -166,9 +252,16 @@
         const statusText = document.getElementById("statusText");
         const lastSyncElement = document.getElementById("lastSync");
         const nextSyncElement = document.getElementById("nextSync");
-        const currentPairElement = document.getElementById("currentPair");
         const lastErrorElement = document.getElementById("lastError");
+        const errorContainer = document.getElementById("errorContainer");
         const syncNowButton = document.getElementById("syncNowButton");
+        const statusOutput = document.getElementById("statusOutput");
+        const sourcePathElement = document.getElementById("sourcePath");
+        const destinationPathElement = document.getElementById("destinationPath");
+
+        // Store output lines
+        let outputLines = [];
+        const maxOutputLines = 100; // Maximum number of lines to display
 
         // Format date for display
         function formatDate(dateString) {
@@ -193,28 +286,65 @@
                         statusIndicator.className = "status-indicator active syncing";
                         statusText.textContent = "Syncing...";
                         syncNowButton.disabled = true;
+
+                        // Add current output line to the array if it's not a path pair
+                        if (status.current_pair && !status.current_pair.includes(":") &&
+                            status.current_pair !== "Sync completed") {
+                            if (outputLines.length === 0 ||
+                                outputLines[outputLines.length - 1] !== status.current_pair) {
+                                outputLines.push(status.current_pair);
+                                // Limit the number of lines
+                                if (outputLines.length > maxOutputLines) {
+                                    outputLines.shift();
+                                }
+                            }
+                        }
+
+                        // Update output display
+                        statusOutput.innerHTML = outputLines.join("<br>");
+
+                        // Scroll to bottom of output
+                        const outputContainer = statusOutput.parentElement;
+                        outputContainer.scrollTop = outputContainer.scrollHeight;
                     } else if (status.last_error) {
                         statusIndicator.className = "status-indicator error";
                         statusText.textContent = "Error";
                         syncNowButton.disabled = false;
+
+                        // Show error message
+                        errorContainer.style.display = "block";
+
+                        // If sync completed with error, show that in the status panel
+                        if (status.current_pair.startsWith("Error:")) {
+                            statusOutput.textContent = "Sync failed with error";
+                        }
                     } else {
                         statusIndicator.className = "status-indicator inactive";
                         statusText.textContent = "Idle";
                         syncNowButton.disabled = false;
+
+                        // If sync completed successfully, show that in the status panel
+                        if (status.current_pair === "Sync completed" ||
+                            status.current_pair.startsWith("Completed:")) {
+                            statusOutput.textContent = "Sync completed successfully";
+                        }
                     }
 
                     // Update other status information
                     lastSyncElement.textContent = formatDate(status.last_sync);
                     nextSyncElement.textContent = formatDate(status.next_sync_time);
-                    currentPairElement.textContent = status.current_pair || "-";
+
+                    // Update source and destination paths
+                    sourcePathElement.textContent = status.source_path || "-";
+                    destinationPathElement.textContent = status.destination_path || "-";
 
                     // Update error message
                     if (status.last_error) {
                         lastErrorElement.textContent = status.last_error;
-                        lastErrorElement.className = "status-value error-message";
+                        errorContainer.style.display = "block";
                     } else {
                         lastErrorElement.textContent = "None";
-                        lastErrorElement.className = "status-value";
+                        errorContainer.style.display = "none";
                     }
 
                     // Update page title to show sync status
@@ -230,6 +360,10 @@
         // Trigger manual sync
         function triggerSync() {
             syncNowButton.disabled = true;
+
+            // Clear previous output
+            outputLines = [];
+            statusOutput.innerHTML = "Starting sync...";
 
             fetch("/api/sync/now", {
                 method: "POST",

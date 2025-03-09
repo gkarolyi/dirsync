@@ -21,11 +21,13 @@ type Config struct {
 
 // Status represents the current sync status
 type Status struct {
-	IsSyncing    bool      `json:"is_syncing"`
-	LastSync     time.Time `json:"last_sync"`
-	NextSyncTime time.Time `json:"next_sync_time"`
-	CurrentPair  string    `json:"current_pair"`
-	LastError    string    `json:"last_error"`
+	IsSyncing       bool      `json:"is_syncing"`
+	LastSync        time.Time `json:"last_sync"`
+	NextSyncTime    time.Time `json:"next_sync_time"`
+	CurrentPair     string    `json:"current_pair"`
+	SourcePath      string    `json:"source_path"`
+	DestinationPath string    `json:"destination_path"`
+	LastError       string    `json:"last_error"`
 }
 
 var (
@@ -95,9 +97,11 @@ func main() {
 
 	// Initialize status
 	status = Status{
-		IsSyncing:    false,
-		LastSync:     time.Now(),
-		NextSyncTime: time.Now().Add(time.Duration(config.SyncInterval) * time.Second),
+		IsSyncing:       false,
+		LastSync:        time.Now(),
+		NextSyncTime:    time.Now().Add(time.Duration(config.SyncInterval) * time.Second),
+		SourcePath:      "",
+		DestinationPath: "",
 	}
 	log.Printf("Status initialized. Next sync at: %v", status.NextSyncTime)
 

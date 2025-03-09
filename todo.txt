@@ -1,0 +1,8 @@
+(A) start sync immediately on start
+(A) reset last sync timestamp on manual sync
+make sure only one sync is running at a time
+skip checking directory, just run rsync
+show path for current sync pair
+allow pausing and resuming transfers
+show multiple transfer panels
+allow adding and removing transfer pairs
