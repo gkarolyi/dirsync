@@ -1,0 +1,263 @@
+<!doctype html>
+<html>
+
+<head>
+    <title>DirSync Status</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .status-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+
+        .active {
+            background: #4caf50;
+            box-shadow: 0 0 8px #4caf50;
+        }
+
+        .inactive {
+            background: #9e9e9e;
+        }
+
+        .error {
+            background: #f44336;
+            box-shadow: 0 0 8px #f44336;
+        }
+
+        .status-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .status-title {
+            margin: 0;
+            flex-grow: 1;
+        }
+
+        .status-label {
+            font-weight: bold;
+            margin-right: 5px;
+        }
+
+        .status-value {
+            font-family: monospace;
+            word-break: break-all;
+        }
+
+        .status-row {
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .status-row:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .button {
+            background: #2196f3;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+
+        .button:hover {
+            background: #0b7dda;
+        }
+
+        .button:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+
+        .button-sync {
+            margin-left: 10px;
+        }
+
+        .error-message {
+            color: #f44336;
+            font-weight: bold;
+        }
+
+        @keyframes pulse {
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+
+        .syncing {
+            animation: pulse 1.5s infinite;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="status-card">
+        <div class="status-header">
+            <h2 class="status-title">DirSync Status</h2>
+            <button id="syncNowButton" class="button button-sync">Sync Now</button>
+        </div>
+
+        <div class="status-row">
+            <span class="status-indicator" id="statusIndicator"></span>
+            <span id="statusText">Checking status...</span>
+        </div>
+
+        <div class="status-row">
+            <span class="status-label">Last sync:</span>
+            <span id="lastSync" class="status-value">-</span>
+        </div>
+
+        <div class="status-row">
+            <span class="status-label">Next sync:</span>
+            <span id="nextSync" class="status-value">-</span>
+        </div>
+
+        <div class="status-row">
+            <span class="status-label">Current pair:</span>
+            <span id="currentPair" class="status-value">-</span>
+        </div>
+
+        <div class="status-row">
+            <span class="status-label">Last error:</span>
+            <span id="lastError" class="status-value">-</span>
+        </div>
+    </div>
+
+    <script>
+        // Get elements
+        const statusIndicator = document.getElementById("statusIndicator");
+        const statusText = document.getElementById("statusText");
+        const lastSyncElement = document.getElementById("lastSync");
+        const nextSyncElement = document.getElementById("nextSync");
+        const currentPairElement = document.getElementById("currentPair");
+        const lastErrorElement = document.getElementById("lastError");
+        const syncNowButton = document.getElementById("syncNowButton");
+
+        // Format date for display
+        function formatDate(dateString) {
+            if (!dateString) return "-";
+            const date = new Date(dateString);
+            if (isNaN(date.getTime())) return "-";
+            return date.toLocaleString();
+        }
+
+        // Update status display
+        function updateStatus() {
+            fetch("/status")
+                .then((response) => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then((status) => {
+                    // Update status indicator and text
+                    if (status.is_syncing) {
+                        statusIndicator.className = "status-indicator active syncing";
+                        statusText.textContent = "Syncing...";
+                        syncNowButton.disabled = true;
+                    } else if (status.last_error) {
+                        statusIndicator.className = "status-indicator error";
+                        statusText.textContent = "Error";
+                        syncNowButton.disabled = false;
+                    } else {
+                        statusIndicator.className = "status-indicator inactive";
+                        statusText.textContent = "Idle";
+                        syncNowButton.disabled = false;
+                    }
+
+                    // Update other status information
+                    lastSyncElement.textContent = formatDate(status.last_sync);
+                    nextSyncElement.textContent = formatDate(status.next_sync_time);
+                    currentPairElement.textContent = status.current_pair || "-";
+
+                    // Update error message
+                    if (status.last_error) {
+                        lastErrorElement.textContent = status.last_error;
+                        lastErrorElement.className = "status-value error-message";
+                    } else {
+                        lastErrorElement.textContent = "None";
+                        lastErrorElement.className = "status-value";
+                    }
+
+                    // Update page title to show sync status
+                    document.title = status.is_syncing ? "DirSync - Syncing..." : "DirSync Status";
+                })
+                .catch((error) => {
+                    console.error("Error fetching status:", error);
+                    statusIndicator.className = "status-indicator error";
+                    statusText.textContent = "Connection Error";
+                });
+        }
+
+        // Trigger manual sync
+        function triggerSync() {
+            syncNowButton.disabled = true;
+
+            fetch("/api/sync/now", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                }
+            })
+                .then(response => response.json())
+                .then(data => {
+                    console.log("Sync triggered:", data);
+                    // Update status immediately
+                    updateStatus();
+                })
+                .catch(error => {
+                    console.error("Error triggering sync:", error);
+                    syncNowButton.disabled = false;
+                });
+        }
+
+        // Add event listener to sync button
+        syncNowButton.addEventListener("click", triggerSync);
+
+        // Update status every second
+        setInterval(updateStatus, 1000);
+
+        // Initial status update
+        updateStatus();
+    </script>
+</body>
+
+</html>

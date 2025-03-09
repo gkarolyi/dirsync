@@ -1,0 +1,7 @@
+{
+  "sync_interval": 60,
+  "sync_pairs": [
+    "./test_source:./test_dest"
+  ],
+  "port": ":8080"
+}
