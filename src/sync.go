@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +18,7 @@ type Sync struct {
 	SourcePath      string    `json:"source_path"`
 	DestinationPath string    `json:"destination_path"`
 	IsSyncing       bool      `json:"is_syncing"`
+	Paused          bool      `json:"paused"`
 	LastSync        time.Time `json:"last_sync"`
 	NextSyncTime    time.Time `json:"next_sync_time"`
 	Output          string    `json:"output"`
@@ -34,6 +34,7 @@ func NewSync(sourcePath, destPath string, interval int) *Sync {
 		SourcePath:      sourcePath,
 		DestinationPath: destPath,
 		IsSyncing:       false,
+		Paused:          false,
 		LastSync:        time.Time{},
 		NextSyncTime:    time.Now(),
 		Output:          "",
@@ -47,7 +48,14 @@ func (s *Sync) Start(interval int) {
 		for {
 			s.mu.RLock()
 			nextSync := s.NextSyncTime
+			paused := s.Paused
 			s.mu.RUnlock()
+
+			// If paused, wait a bit and check again
+			if paused {
+				time.Sleep(1 * time.Second)
+				continue
+			}
 
 			// Calculate time until next sync
 			waitTime := time.Until(nextSync)
@@ -56,13 +64,20 @@ func (s *Sync) Start(interval int) {
 			// Wait until next sync time
 			time.Sleep(waitTime)
 
-			// Perform the sync
-			s.SyncDirectories()
+			// Check if paused before starting sync
+			s.mu.RLock()
+			paused = s.Paused
+			s.mu.RUnlock()
 
-			// Update next sync time
-			s.mu.Lock()
-			s.NextSyncTime = time.Now().Add(time.Duration(interval) * time.Second)
-			s.mu.Unlock()
+			if !paused {
+				// Perform the sync
+				s.SyncDirectories()
+
+				// Update next sync time
+				s.mu.Lock()
+				s.NextSyncTime = time.Now().Add(time.Duration(interval) * time.Second)
+				s.mu.Unlock()
+			}
 		}
 	}()
 }
@@ -71,6 +86,25 @@ func (s *Sync) Start(interval int) {
 func (s *Sync) TriggerSync() {
 	s.mu.Lock()
 	s.NextSyncTime = time.Now()
+	s.Paused = false // Unpause if paused
+	s.mu.Unlock()
+}
+
+// PauseSync pauses the sync process
+func (s *Sync) PauseSync() {
+	s.mu.Lock()
+	s.Paused = true
+	if s.IsSyncing {
+		s.Output += "\nSync paused by user"
+	}
+	s.mu.Unlock()
+}
+
+// ResumeSync resumes the sync process
+func (s *Sync) ResumeSync() {
+	s.mu.Lock()
+	s.Paused = false
+	s.Output += "\nSync resumed by user"
 	s.mu.Unlock()
 }
 
@@ -84,6 +118,7 @@ func (s *Sync) GetStatus() map[string]interface{} {
 		"source_path":      s.SourcePath,
 		"destination_path": s.DestinationPath,
 		"is_syncing":       s.IsSyncing,
+		"paused":           s.Paused,
 		"last_sync":        s.LastSync,
 		"next_sync_time":   s.NextSyncTime,
 		"output":           s.Output,
@@ -93,6 +128,15 @@ func (s *Sync) GetStatus() map[string]interface{} {
 
 // SyncDirectories synchronizes files from source to destination using rsync
 func (s *Sync) SyncDirectories() error {
+	// Check if paused before starting
+	s.mu.RLock()
+	paused := s.Paused
+	s.mu.RUnlock()
+
+	if paused {
+		return nil
+	}
+
 	// Update status
 	s.mu.Lock()
 	s.IsSyncing = true
@@ -149,13 +193,16 @@ func (s *Sync) SyncDirectories() error {
 	// Check if rsync is available
 	_, err = exec.LookPath("rsync")
 	if err != nil {
-		errMsg := "rsync command not found, falling back to file copy method"
+		errMsg := "rsync command not found. Please install rsync and try again."
 		log.Println(errMsg)
+		s.setError(errMsg)
+
+		// Pause the sync until manually resumed
 		s.mu.Lock()
-		s.Output += "\n" + errMsg
+		s.Paused = true
 		s.mu.Unlock()
-		// Fall back to file copy method
-		return s.syncWithFileCopy()
+
+		return err
 	}
 
 	// Ensure source path ends with a slash to copy contents only
@@ -204,6 +251,32 @@ func (s *Sync) SyncDirectories() error {
 	// Create a channel to signal when reading is done
 	done := make(chan bool)
 
+	// Create a channel to signal when to stop the command
+	stopCmd := make(chan bool, 1)
+
+	// Start a goroutine to check for pause state
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				s.mu.RLock()
+				paused := s.Paused
+				s.mu.RUnlock()
+
+				if paused {
+					// Signal to stop the command
+					stopCmd <- true
+					return
+				}
+			}
+		}
+	}()
+
 	// Read stdout in a goroutine
 	go func() {
 		scanner := bufio.NewScanner(stdout)
@@ -237,21 +310,36 @@ func (s *Sync) SyncDirectories() error {
 		done <- true
 	}()
 
-	// Wait for both stdout and stderr to be fully read
-	<-done
-	<-done
+	// Wait for either the command to finish or a stop signal
+	var cmdErr error
+	select {
+	case <-stopCmd:
+		// Kill the command if paused
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+		outputBuffer.WriteString("\nSync paused by user\n")
+		s.mu.Lock()
+		s.Output = outputBuffer.String()
+		s.IsSyncing = false
+		s.mu.Unlock()
+		return nil
+	case <-done:
+		// Wait for both stdout and stderr to be fully read
+		<-done
 
-	// Wait for the command to finish
-	err = cmd.Wait()
+		// Wait for the command to finish
+		cmdErr = cmd.Wait()
+	}
 
 	// Get the complete output
 	output := outputBuffer.String()
 
-	if err != nil {
-		errMsg := fmt.Sprintf("rsync error: %v", err)
+	if cmdErr != nil {
+		errMsg := fmt.Sprintf("rsync error: %v", cmdErr)
 		log.Println(errMsg)
 		s.setError(errMsg)
-		return err
+		return cmdErr
 	}
 
 	log.Printf("[%s] rsync completed successfully", s.ID)
@@ -280,132 +368,6 @@ func isDirEmpty(dirPath string) (bool, error) {
 		return true, nil // Directory is empty
 	}
 	return false, err // Either not empty or error
-}
-
-// syncWithFileCopy is a fallback method if rsync is not available
-func (s *Sync) syncWithFileCopy() error {
-	log.Printf("[%s] Using file copy method for %s to %s", s.ID, s.SourcePath, s.DestinationPath)
-
-	// Get current output
-	s.mu.Lock()
-	currentOutput := s.Output
-	s.mu.Unlock()
-
-	// Create a buffer to store the output
-	var outputBuffer strings.Builder
-	outputBuffer.WriteString(currentOutput)
-	outputBuffer.WriteString(fmt.Sprintf("\nUsing file copy method for %s to %s\n", s.SourcePath, s.DestinationPath))
-
-	// Check if source directory is empty
-	empty, err := isDirEmpty(s.SourcePath)
-	if err != nil {
-		errMsg := fmt.Sprintf("Error checking if source directory is empty: %s", err)
-		log.Println(errMsg)
-		s.setError(errMsg)
-		return err
-	}
-
-	if empty {
-		log.Printf("[%s] Source directory %s is empty, nothing to sync", s.ID, s.SourcePath)
-		// Update status
-		s.mu.Lock()
-		s.IsSyncing = false
-		s.LastSync = time.Now()
-		s.Output = outputBuffer.String() + fmt.Sprintf("\nSource directory %s is empty, nothing to sync", s.SourcePath)
-		s.mu.Unlock()
-		return nil
-	}
-
-	// Walk through the source directory
-	fileCount := 0
-
-	err = filepath.Walk(s.SourcePath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			log.Printf("[%s] Error accessing path %s: %v", s.ID, path, err)
-			return err
-		}
-
-		// Get relative path
-		relPath, err := filepath.Rel(s.SourcePath, path)
-		if err != nil {
-			log.Printf("[%s] Error getting relative path for %s: %v", s.ID, path, err)
-			return err
-		}
-
-		// Skip the root directory
-		if relPath == "." {
-			return nil
-		}
-
-		// Construct destination path
-		destFilePath := filepath.Join(s.DestinationPath, relPath)
-
-		// If it's a directory, create it in destination
-		if info.IsDir() {
-			log.Printf("[%s] Creating directory: %s", s.ID, destFilePath)
-			outputBuffer.WriteString(fmt.Sprintf("Creating directory: %s\n", relPath))
-
-			// Update output periodically
-			s.mu.Lock()
-			s.Output = outputBuffer.String()
-			s.mu.Unlock()
-
-			return os.MkdirAll(destFilePath, info.Mode())
-		}
-
-		// It's a file, so copy it
-		log.Printf("[%s] Copying file: %s to %s", s.ID, path, destFilePath)
-		outputBuffer.WriteString(fmt.Sprintf("Copying file: %s\n", relPath))
-
-		// Update output periodically
-		s.mu.Lock()
-		s.Output = outputBuffer.String()
-		s.mu.Unlock()
-
-		fileCount++
-		return copyFile(path, destFilePath, info.Mode())
-	})
-
-	// Update status
-	s.mu.Lock()
-	s.IsSyncing = false
-	s.LastSync = time.Now()
-	if err != nil {
-		s.LastError = err.Error()
-		s.Output = outputBuffer.String() + fmt.Sprintf("\nError: %s", err.Error())
-		log.Printf("[%s] Sync error: %v", s.ID, err)
-	} else {
-		s.Output = outputBuffer.String() + fmt.Sprintf("\nCompleted: %d files copied", fileCount)
-		log.Printf("[%s] Sync completed successfully. Copied %d files.", s.ID, fileCount)
-	}
-	s.mu.Unlock()
-
-	return err
-}
-
-// copyFile copies a file from src to dest
-func copyFile(src, dest string, mode os.FileMode) error {
-	// Open source file
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	// Create destination file
-	destFile, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer destFile.Close()
-
-	// Copy the content
-	if _, err := io.Copy(destFile, srcFile); err != nil {
-		return err
-	}
-
-	// Set the same permissions
-	return os.Chmod(dest, mode)
 }
 
 // setError updates the status with an error message
@@ -497,4 +459,34 @@ func StartSyncProcess(syncManager *SyncManager, config *Config) {
 		sync := syncManager.AddSync(sourcePath, destPath, config.SyncInterval)
 		sync.Start(config.SyncInterval)
 	}
+}
+
+// PauseSyncByID pauses a sync by its ID
+func (sm *SyncManager) PauseSyncByID(id string) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	for _, sync := range sm.Syncs {
+		if sync.ID == id {
+			sync.PauseSync()
+			return true
+		}
+	}
+
+	return false
+}
+
+// ResumeSyncByID resumes a sync by its ID
+func (sm *SyncManager) ResumeSyncByID(id string) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	for _, sync := range sm.Syncs {
+		if sync.ID == id {
+			sync.ResumeSync()
+			return true
+		}
+	}
+
+	return false
 }

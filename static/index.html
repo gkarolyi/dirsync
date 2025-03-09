@@ -240,8 +240,9 @@
             display: block;
         }
 
-        .view-details-btn {
-            background: #4caf50;
+        .view-details-btn,
+        .pause-btn,
+        .resume-btn {
             color: white;
             border: none;
             padding: 5px 10px;
@@ -251,8 +252,28 @@
             margin-left: 10px;
         }
 
+        .view-details-btn {
+            background: #4caf50;
+        }
+
         .view-details-btn:hover {
             background: #3d8b40;
+        }
+
+        .pause-btn {
+            background: #ff9800;
+        }
+
+        .pause-btn:hover {
+            background: #e68900;
+        }
+
+        .resume-btn {
+            background: #2196f3;
+        }
+
+        .resume-btn:hover {
+            background: #0b7dda;
         }
     </style>
 </head>
@@ -333,9 +354,34 @@
                 }
             });
 
+            // Create pause/resume button
+            let controlBtn;
+            if (sync.paused) {
+                // Show resume button if sync is paused
+                controlBtn = document.createElement("button");
+                controlBtn.className = "resume-btn";
+                controlBtn.textContent = "Resume";
+                controlBtn.addEventListener("click", function (e) {
+                    e.stopPropagation();
+                    resumeSync(syncId);
+                });
+            } else if (!sync.last_error) {
+                // Show pause button if sync is not paused and has no error
+                controlBtn = document.createElement("button");
+                controlBtn.className = "pause-btn";
+                controlBtn.textContent = "Pause";
+                controlBtn.addEventListener("click", function (e) {
+                    e.stopPropagation();
+                    pauseSync(syncId);
+                });
+            }
+
             // Add elements to header
             syncHeader.appendChild(statusIndicator);
             syncHeader.appendChild(syncTitle);
+            if (controlBtn) {
+                syncHeader.appendChild(controlBtn);
+            }
             syncHeader.appendChild(viewDetailsBtn);
 
             // Create sync details
@@ -352,7 +398,15 @@
 
             const statusText = document.createElement("span");
             statusText.className = "sync-status-text";
-            statusText.textContent = sync.is_syncing ? "Syncing..." : (sync.last_error ? "Error" : "Idle");
+            if (sync.paused) {
+                statusText.textContent = "Paused";
+            } else if (sync.is_syncing) {
+                statusText.textContent = "Syncing...";
+            } else if (sync.last_error) {
+                statusText.textContent = "Error";
+            } else {
+                statusText.textContent = "Idle";
+            }
 
             statusRow.appendChild(statusLabel);
             statusRow.appendChild(statusText);
@@ -483,13 +537,13 @@
             // Update status indicator and text
             if (sync.is_syncing) {
                 statusIndicator.className = "sync-status-indicator active syncing";
-                statusText.textContent = "Syncing...";
+                statusText.textContent = sync.paused ? "Paused" : "Syncing...";
             } else if (sync.last_error) {
                 statusIndicator.className = "sync-status-indicator error";
                 statusText.textContent = "Error";
             } else {
                 statusIndicator.className = "sync-status-indicator inactive";
-                statusText.textContent = "Idle";
+                statusText.textContent = sync.paused ? "Paused" : "Idle";
             }
 
             // Update other status information
@@ -503,6 +557,41 @@
             } else {
                 errorMessage.textContent = "None";
                 errorContainer.style.display = "none";
+            }
+
+            // Update pause/resume button
+            let existingControlBtn = syncItem.querySelector(".pause-btn, .resume-btn");
+            if (existingControlBtn) {
+                existingControlBtn.remove();
+            }
+
+            // Create new control button if needed
+            if (sync.paused) {
+                // Show resume button if sync is paused
+                const resumeBtn = document.createElement("button");
+                resumeBtn.className = "resume-btn";
+                resumeBtn.textContent = "Resume";
+                resumeBtn.addEventListener("click", function (e) {
+                    e.stopPropagation();
+                    resumeSync(sync.id);
+                });
+
+                // Insert before the view details button
+                const viewDetailsBtn = syncItem.querySelector(".view-details-btn");
+                viewDetailsBtn.parentNode.insertBefore(resumeBtn, viewDetailsBtn);
+            } else if (!sync.last_error) {
+                // Show pause button if sync is not paused and has no error
+                const pauseBtn = document.createElement("button");
+                pauseBtn.className = "pause-btn";
+                pauseBtn.textContent = "Pause";
+                pauseBtn.addEventListener("click", function (e) {
+                    e.stopPropagation();
+                    pauseSync(sync.id);
+                });
+
+                // Insert before the view details button
+                const viewDetailsBtn = syncItem.querySelector(".view-details-btn");
+                viewDetailsBtn.parentNode.insertBefore(pauseBtn, viewDetailsBtn);
             }
         }
 
@@ -542,6 +631,54 @@
                     console.error("Error fetching sync details:", error);
                     const outputPanel = syncItem.querySelector(".status-output");
                     outputPanel.textContent = "Error loading details: " + error.message;
+                });
+        }
+
+        // Pause a sync
+        function pauseSync(syncId) {
+            fetch(`/api/sync/pause?id=${encodeURIComponent(syncId)}`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                }
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log("Sync paused:", data);
+                    // Update status immediately
+                    updateStatus();
+                })
+                .catch(error => {
+                    console.error("Error pausing sync:", error);
+                });
+        }
+
+        // Resume a sync
+        function resumeSync(syncId) {
+            fetch(`/api/sync/resume?id=${encodeURIComponent(syncId)}`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                }
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log("Sync resumed:", data);
+                    // Update status immediately
+                    updateStatus();
+                })
+                .catch(error => {
+                    console.error("Error resuming sync:", error);
                 });
         }
 

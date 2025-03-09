@@ -99,6 +99,8 @@ func main() {
 	http.HandleFunc("/status", handleStatus)
 	http.HandleFunc("/api/sync/now", handleSyncNow)
 	http.HandleFunc("/api/sync/details", handleSyncDetails)
+	http.HandleFunc("/api/sync/pause", handleSyncPause)
+	http.HandleFunc("/api/sync/resume", handleSyncResume)
 
 	// Start server
 	port := config.Port
@@ -163,4 +165,54 @@ func handleSyncDetails(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+}
+
+// handleSyncPause pauses a specific sync
+func handleSyncPause(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "Missing sync ID", http.StatusBadRequest)
+		return
+	}
+
+	success := syncManager.PauseSyncByID(id)
+	if !success {
+		http.Error(w, "Sync not found", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("Paused sync: %s", id)
+
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"success": true, "message": "Sync paused"}`)
+}
+
+// handleSyncResume resumes a specific sync
+func handleSyncResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "Missing sync ID", http.StatusBadRequest)
+		return
+	}
+
+	success := syncManager.ResumeSyncByID(id)
+	if !success {
+		http.Error(w, "Sync not found", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("Resumed sync: %s", id)
+
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"success": true, "message": "Sync resumed"}`)
 }

@@ -81,9 +81,9 @@ func TestSyncInitialization(t *testing.T) {
 
 	// Allow a small time difference due to execution time
 	timeDiff := testSync.NextSyncTime.Sub(time.Now())
-	expectedDiff := time.Duration(interval) * time.Second
-	if timeDiff < expectedDiff-time.Second || timeDiff > expectedDiff+time.Second {
-		t.Errorf("Expected time difference of %v, got %v", expectedDiff, timeDiff)
+	// The NextSyncTime is now set to time.Now() for immediate first sync
+	if timeDiff < -5*time.Second || timeDiff > 5*time.Second {
+		t.Errorf("Expected NextSyncTime to be close to current time, but difference is %v", timeDiff)
 	}
 }
 
