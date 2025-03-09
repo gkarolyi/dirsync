@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 )
 
 // Config holds our JSON configuration
@@ -19,23 +17,10 @@ type Config struct {
 	Port         string   `json:"port"`
 }
 
-// Status represents the current sync status
-type Status struct {
-	IsSyncing       bool      `json:"is_syncing"`
-	LastSync        time.Time `json:"last_sync"`
-	NextSyncTime    time.Time `json:"next_sync_time"`
-	CurrentPair     string    `json:"current_pair"`
-	SourcePath      string    `json:"source_path"`
-	DestinationPath string    `json:"destination_path"`
-	LastError       string    `json:"last_error"`
-}
-
 var (
-	status Status
-	mu     sync.RWMutex
-	config Config
-	// Store the base directory for the application
-	baseDir string
+	config      Config
+	baseDir     string
+	syncManager *SyncManager
 )
 
 func main() {
@@ -95,18 +80,11 @@ func main() {
 	log.Printf("Loaded configuration: Sync interval: %d seconds, Sync pairs: %v, Port: %s",
 		config.SyncInterval, config.SyncPairs, config.Port)
 
-	// Initialize status
-	status = Status{
-		IsSyncing:       false,
-		LastSync:        time.Now(),
-		NextSyncTime:    time.Now().Add(time.Duration(config.SyncInterval) * time.Second),
-		SourcePath:      "",
-		DestinationPath: "",
-	}
-	log.Printf("Status initialized. Next sync at: %v", status.NextSyncTime)
+	// Initialize sync manager
+	syncManager = NewSyncManager()
 
 	// Start sync process in a goroutine
-	go StartSyncProcess()
+	go StartSyncProcess(syncManager, &config)
 
 	// Set up routes
 	staticDir := filepath.Join(baseDir, "static")
@@ -120,6 +98,7 @@ func main() {
 	http.Handle("/", http.FileServer(http.Dir(staticDir)))
 	http.HandleFunc("/status", handleStatus)
 	http.HandleFunc("/api/sync/now", handleSyncNow)
+	http.HandleFunc("/api/sync/details", handleSyncDetails)
 
 	// Start server
 	port := config.Port
@@ -137,11 +116,11 @@ func main() {
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
-	mu.RLock()
-	defer mu.RUnlock()
-
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(status); err != nil {
+
+	statuses := syncManager.GetAllStatus()
+
+	if err := json.NewEncoder(w).Encode(statuses); err != nil {
 		log.Printf("Error encoding status: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -157,11 +136,31 @@ func handleSyncNow(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("Manual sync triggered")
 
-	// Update next sync time to now
-	mu.Lock()
-	status.NextSyncTime = time.Now()
-	mu.Unlock()
+	// Trigger all syncs
+	syncManager.TriggerAllSyncs()
 
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"success": true, "message": "Sync triggered"}`)
+}
+
+// handleSyncDetails returns details for a specific sync
+func handleSyncDetails(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "Missing sync ID", http.StatusBadRequest)
+		return
+	}
+
+	sync := syncManager.GetSyncByID(id)
+	if sync == nil {
+		http.Error(w, "Sync not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(sync.GetStatus()); err != nil {
+		log.Printf("Error encoding sync details: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }

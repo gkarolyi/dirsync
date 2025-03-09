@@ -199,6 +199,56 @@
             padding: 8px;
             border-radius: 4px;
         }
+
+        .sync-list {
+            margin-top: 20px;
+        }
+
+        .sync-item {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+        }
+
+        .sync-header {
+            display: flex;
+            align-items: center;
+            padding: 10px 15px;
+            background: #f0f8ff;
+            cursor: pointer;
+        }
+
+        .sync-title {
+            margin: 0;
+            flex-grow: 1;
+            font-size: 16px;
+            font-weight: bold;
+        }
+
+        .sync-details {
+            padding: 15px;
+            display: none;
+        }
+
+        .sync-details.active {
+            display: block;
+        }
+
+        .view-details-btn {
+            background: #4caf50;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+
+        .view-details-btn:hover {
+            background: #3d8b40;
+        }
     </style>
 </head>
 
@@ -206,62 +256,25 @@
     <div class="status-card">
         <div class="status-header">
             <h2 class="status-title">DirSync Status</h2>
-            <button id="syncNowButton" class="button button-sync">Sync Now</button>
+            <button id="syncNowButton" class="button button-sync">Sync All Now</button>
         </div>
 
-        <div class="status-row">
-            <span class="status-indicator" id="statusIndicator"></span>
-            <span id="statusText">Checking status...</span>
-        </div>
-
-        <div class="path-container">
-            <div class="path-header">Source Path:</div>
-            <div id="sourcePath" class="path-value">-</div>
-        </div>
-
-        <div class="path-container">
-            <div class="path-header">Destination Path:</div>
-            <div id="destinationPath" class="path-value">-</div>
-        </div>
-
-        <div class="sync-info">
-            <div class="sync-info-item">
-                <div class="sync-info-label">Last Sync:</div>
-                <div id="lastSync" class="sync-info-value">-</div>
+        <div id="syncList" class="sync-list">
+            <!-- Sync items will be added here dynamically -->
+            <div class="status-row" id="loadingStatus">
+                <span>Loading sync status...</span>
             </div>
-            <div class="sync-info-item">
-                <div class="sync-info-label">Next Sync:</div>
-                <div id="nextSync" class="sync-info-value">-</div>
-            </div>
-        </div>
-
-        <div class="status-row" id="errorContainer" style="display: none;">
-            <span class="status-label">Error:</span>
-            <span id="lastError" class="status-value error-message">-</span>
-        </div>
-
-        <div class="status-panel">
-            <div class="status-panel-title">Status</div>
-            <div id="statusOutput">Waiting for sync...</div>
         </div>
     </div>
 
     <script>
         // Get elements
-        const statusIndicator = document.getElementById("statusIndicator");
-        const statusText = document.getElementById("statusText");
-        const lastSyncElement = document.getElementById("lastSync");
-        const nextSyncElement = document.getElementById("nextSync");
-        const lastErrorElement = document.getElementById("lastError");
-        const errorContainer = document.getElementById("errorContainer");
         const syncNowButton = document.getElementById("syncNowButton");
-        const statusOutput = document.getElementById("statusOutput");
-        const sourcePathElement = document.getElementById("sourcePath");
-        const destinationPathElement = document.getElementById("destinationPath");
+        const syncList = document.getElementById("syncList");
+        const loadingStatus = document.getElementById("loadingStatus");
 
-        // Store output lines
-        let outputLines = [];
-        const maxOutputLines = 100; // Maximum number of lines to display
+        // Store sync details
+        let syncDetails = {};
 
         // Format date for display
         function formatDate(dateString) {
@@ -269,6 +282,200 @@
             const date = new Date(dateString);
             if (isNaN(date.getTime())) return "-";
             return date.toLocaleString();
+        }
+
+        // Create a sync item element
+        function createSyncItem(sync) {
+            const syncId = sync.id;
+
+            // Create sync item container
+            const syncItem = document.createElement("div");
+            syncItem.className = "sync-item";
+            syncItem.id = `sync-${syncId.replace(/[^a-zA-Z0-9]/g, "-")}`;
+
+            // Create sync header
+            const syncHeader = document.createElement("div");
+            syncHeader.className = "sync-header";
+
+            // Create status indicator
+            const statusIndicator = document.createElement("span");
+            statusIndicator.className = "status-indicator";
+            if (sync.is_syncing) {
+                statusIndicator.className = "status-indicator active syncing";
+            } else if (sync.last_error) {
+                statusIndicator.className = "status-indicator error";
+            } else {
+                statusIndicator.className = "status-indicator inactive";
+            }
+
+            // Create sync title
+            const syncTitle = document.createElement("h3");
+            syncTitle.className = "sync-title";
+            syncTitle.textContent = `${sync.source_path} → ${sync.destination_path}`;
+
+            // Create view details button
+            const viewDetailsBtn = document.createElement("button");
+            viewDetailsBtn.className = "view-details-btn";
+            viewDetailsBtn.textContent = "View Details";
+            viewDetailsBtn.addEventListener("click", function (e) {
+                e.stopPropagation();
+                const details = syncItem.querySelector(".sync-details");
+                details.classList.toggle("active");
+
+                // If details are now visible, fetch the latest output
+                if (details.classList.contains("active")) {
+                    fetchSyncDetails(syncId, syncItem);
+                }
+            });
+
+            // Add elements to header
+            syncHeader.appendChild(statusIndicator);
+            syncHeader.appendChild(syncTitle);
+            syncHeader.appendChild(viewDetailsBtn);
+
+            // Create sync details
+            const syncDetails = document.createElement("div");
+            syncDetails.className = "sync-details";
+
+            // Create status text
+            const statusText = document.createElement("div");
+            statusText.className = "status-row";
+            statusText.innerHTML = `<span class="status-label">Status:</span> <span>${sync.is_syncing ? "Syncing..." : (sync.last_error ? "Error" : "Idle")}</span>`;
+
+            // Create path container for source
+            const sourcePathContainer = document.createElement("div");
+            sourcePathContainer.className = "path-container";
+            sourcePathContainer.innerHTML = `
+                <div class="path-header">Source Path:</div>
+                <div class="path-value">${sync.source_path || "-"}</div>
+            `;
+
+            // Create path container for destination
+            const destPathContainer = document.createElement("div");
+            destPathContainer.className = "path-container";
+            destPathContainer.innerHTML = `
+                <div class="path-header">Destination Path:</div>
+                <div class="path-value">${sync.destination_path || "-"}</div>
+            `;
+
+            // Create sync info
+            const syncInfo = document.createElement("div");
+            syncInfo.className = "sync-info";
+            syncInfo.innerHTML = `
+                <div class="sync-info-item">
+                    <div class="sync-info-label">Last Sync:</div>
+                    <div class="sync-info-value">${formatDate(sync.last_sync)}</div>
+                </div>
+                <div class="sync-info-item">
+                    <div class="sync-info-label">Next Sync:</div>
+                    <div class="sync-info-value">${formatDate(sync.next_sync_time)}</div>
+                </div>
+            `;
+
+            // Create error container
+            const errorContainer = document.createElement("div");
+            errorContainer.className = "status-row";
+            errorContainer.style.display = sync.last_error ? "block" : "none";
+            errorContainer.innerHTML = `
+                <span class="status-label">Error:</span>
+                <span class="status-value error-message">${sync.last_error || "None"}</span>
+            `;
+
+            // Create status panel
+            const statusPanel = document.createElement("div");
+            statusPanel.className = "status-panel";
+            statusPanel.innerHTML = `
+                <div class="status-panel-title">Output</div>
+                <div class="status-output">Click "View Details" to load the latest output...</div>
+            `;
+
+            // Add elements to details
+            syncDetails.appendChild(statusText);
+            syncDetails.appendChild(sourcePathContainer);
+            syncDetails.appendChild(destPathContainer);
+            syncDetails.appendChild(syncInfo);
+            syncDetails.appendChild(errorContainer);
+            syncDetails.appendChild(statusPanel);
+
+            // Add header and details to item
+            syncItem.appendChild(syncHeader);
+            syncItem.appendChild(syncDetails);
+
+            return syncItem;
+        }
+
+        // Update a sync item with new data
+        function updateSyncItem(syncItem, sync) {
+            const statusIndicator = syncItem.querySelector(".status-indicator");
+            const statusText = syncItem.querySelector(".status-row span:last-child");
+            const lastSyncElement = syncItem.querySelector(".sync-info-item:first-child .sync-info-value");
+            const nextSyncElement = syncItem.querySelector(".sync-info-item:last-child .sync-info-value");
+            const errorContainer = syncItem.querySelector(".status-row:nth-of-type(4)");
+            const errorMessage = syncItem.querySelector(".error-message");
+
+            // Update status indicator and text
+            if (sync.is_syncing) {
+                statusIndicator.className = "status-indicator active syncing";
+                statusText.textContent = "Syncing...";
+            } else if (sync.last_error) {
+                statusIndicator.className = "status-indicator error";
+                statusText.textContent = "Error";
+            } else {
+                statusIndicator.className = "status-indicator inactive";
+                statusText.textContent = "Idle";
+            }
+
+            // Update other status information
+            lastSyncElement.textContent = formatDate(sync.last_sync);
+            nextSyncElement.textContent = formatDate(sync.next_sync_time);
+
+            // Update error message
+            if (sync.last_error) {
+                errorMessage.textContent = sync.last_error;
+                errorContainer.style.display = "block";
+            } else {
+                errorMessage.textContent = "None";
+                errorContainer.style.display = "none";
+            }
+        }
+
+        // Fetch details for a specific sync
+        function fetchSyncDetails(syncId, syncItem) {
+            fetch(`/api/sync/details?id=${encodeURIComponent(syncId)}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(syncData => {
+                    // Update the output panel
+                    const outputPanel = syncItem.querySelector(".status-output");
+
+                    // Format the output for better display
+                    let formattedOutput = syncData.output || "No output available";
+
+                    // Replace any HTML special characters to prevent XSS
+                    formattedOutput = formattedOutput
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;");
+
+                    // Convert newlines to <br> for proper display
+                    formattedOutput = formattedOutput.replace(/\n/g, "<br>");
+
+                    // Set the formatted output
+                    outputPanel.innerHTML = formattedOutput;
+
+                    // Scroll to bottom of output
+                    const outputContainer = outputPanel.parentElement;
+                    outputContainer.scrollTop = outputContainer.scrollHeight;
+                })
+                .catch(error => {
+                    console.error("Error fetching sync details:", error);
+                    const outputPanel = syncItem.querySelector(".status-output");
+                    outputPanel.textContent = "Error loading details: " + error.message;
+                });
         }
 
         // Update status display
@@ -280,90 +487,60 @@
                     }
                     return response.json();
                 })
-                .then((status) => {
-                    // Update status indicator and text
-                    if (status.is_syncing) {
-                        statusIndicator.className = "status-indicator active syncing";
-                        statusText.textContent = "Syncing...";
-                        syncNowButton.disabled = true;
+                .then((syncs) => {
+                    // Hide loading message
+                    loadingStatus.style.display = "none";
 
-                        // Add current output line to the array if it's not a path pair
-                        if (status.current_pair && !status.current_pair.includes(":") &&
-                            status.current_pair !== "Sync completed") {
-                            if (outputLines.length === 0 ||
-                                outputLines[outputLines.length - 1] !== status.current_pair) {
-                                outputLines.push(status.current_pair);
-                                // Limit the number of lines
-                                if (outputLines.length > maxOutputLines) {
-                                    outputLines.shift();
-                                }
+                    // If no syncs, show message
+                    if (syncs.length === 0) {
+                        syncList.innerHTML = "<div class='status-row'>No sync tasks configured</div>";
+                        return;
+                    }
+
+                    // Process each sync
+                    syncs.forEach(sync => {
+                        const syncId = sync.id;
+                        const syncItemId = `sync-${syncId.replace(/[^a-zA-Z0-9]/g, "-")}`;
+                        let syncItem = document.getElementById(syncItemId);
+
+                        if (syncItem) {
+                            // Update existing sync item
+                            updateSyncItem(syncItem, sync);
+                        } else {
+                            // Create new sync item
+                            syncItem = createSyncItem(sync);
+                            syncList.appendChild(syncItem);
+                        }
+
+                        // If details are visible or sync is currently running, update the output
+                        const details = syncItem.querySelector(".sync-details");
+                        if (details.classList.contains("active") || sync.is_syncing) {
+                            fetchSyncDetails(syncId, syncItem);
+
+                            // If sync is running but details aren't visible, show them
+                            if (sync.is_syncing && !details.classList.contains("active")) {
+                                details.classList.add("active");
                             }
                         }
+                    });
 
-                        // Update output display
-                        statusOutput.innerHTML = outputLines.join("<br>");
-
-                        // Scroll to bottom of output
-                        const outputContainer = statusOutput.parentElement;
-                        outputContainer.scrollTop = outputContainer.scrollHeight;
-                    } else if (status.last_error) {
-                        statusIndicator.className = "status-indicator error";
-                        statusText.textContent = "Error";
-                        syncNowButton.disabled = false;
-
-                        // Show error message
-                        errorContainer.style.display = "block";
-
-                        // If sync completed with error, show that in the status panel
-                        if (status.current_pair.startsWith("Error:")) {
-                            statusOutput.textContent = "Sync failed with error";
-                        }
-                    } else {
-                        statusIndicator.className = "status-indicator inactive";
-                        statusText.textContent = "Idle";
-                        syncNowButton.disabled = false;
-
-                        // If sync completed successfully, show that in the status panel
-                        if (status.current_pair === "Sync completed" ||
-                            status.current_pair.startsWith("Completed:")) {
-                            statusOutput.textContent = "Sync completed successfully";
-                        }
-                    }
-
-                    // Update other status information
-                    lastSyncElement.textContent = formatDate(status.last_sync);
-                    nextSyncElement.textContent = formatDate(status.next_sync_time);
-
-                    // Update source and destination paths
-                    sourcePathElement.textContent = status.source_path || "-";
-                    destinationPathElement.textContent = status.destination_path || "-";
-
-                    // Update error message
-                    if (status.last_error) {
-                        lastErrorElement.textContent = status.last_error;
-                        errorContainer.style.display = "block";
-                    } else {
-                        lastErrorElement.textContent = "None";
-                        errorContainer.style.display = "none";
-                    }
+                    // Check if any sync is currently running
+                    const anySyncing = syncs.some(sync => sync.is_syncing);
+                    syncNowButton.disabled = anySyncing;
 
                     // Update page title to show sync status
-                    document.title = status.is_syncing ? "DirSync - Syncing..." : "DirSync Status";
+                    document.title = anySyncing ? "DirSync - Syncing..." : "DirSync Status";
                 })
                 .catch((error) => {
                     console.error("Error fetching status:", error);
-                    statusIndicator.className = "status-indicator error";
-                    statusText.textContent = "Connection Error";
+                    loadingStatus.textContent = "Error connecting to server: " + error.message;
+                    loadingStatus.style.display = "block";
                 });
         }
 
         // Trigger manual sync
         function triggerSync() {
             syncNowButton.disabled = true;
-
-            // Clear previous output
-            outputLines = [];
-            statusOutput.innerHTML = "Starting sync...";
 
             fetch("/api/sync/now", {
                 method: "POST",

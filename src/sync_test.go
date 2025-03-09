@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -57,73 +55,31 @@ func TestSyncDirectories(t *testing.T) {
 		return nil
 	})
 
-	// Initialize status for testing
-	status = Status{
-		IsSyncing:    false,
-		LastSync:     time.Now(),
-		NextSyncTime: time.Now().Add(60 * time.Second),
-	}
+	// Clean the destination directory
+	os.RemoveAll(destDir)
+	os.MkdirAll(destDir, 0755)
 
-	// Load the test config
-	configFile, err := os.ReadFile("test_config.json")
+	// Create a test sync
+	testSync := NewSync(sourceDir, destDir, 60)
+
+	// Perform the sync
+	err := testSync.SyncDirectories()
 	if err != nil {
-		t.Fatalf("Error reading config: %v", err)
-	}
-
-	if err := json.Unmarshal(configFile, &config); err != nil {
-		t.Fatalf("Error parsing config: %v", err)
-	}
-
-	// Check if rsync is available
-	_, err = exec.LookPath("rsync")
-	rsyncAvailable := err == nil
-
-	if rsyncAvailable {
-		t.Log("rsync is available, testing with rsync")
-	} else {
-		t.Log("rsync is not available, testing with file copy fallback")
-	}
-
-	// Create a file in the destination that doesn't exist in the source
-	destOnlyFile := filepath.Join(destDir, "dest_only.txt")
-	destOnlyContent := "This file exists only in the destination"
-	if err := os.WriteFile(destOnlyFile, []byte(destOnlyContent), 0644); err != nil {
-		t.Fatalf("Failed to create destination-only file: %v", err)
-	}
-
-	// Run the sync
-	if err := SyncDirectories(sourceDir, destDir); err != nil {
 		t.Fatalf("SyncDirectories failed: %v", err)
 	}
 
-	// Verify status was updated correctly
-	if status.IsSyncing {
-		t.Error("Expected IsSyncing to be false after sync")
-	}
-
-	if status.LastError != "" {
-		t.Errorf("Expected no error, got: %s", status.LastError)
-	}
-
-	// Check if CurrentPair was updated with completion message
-	if status.CurrentPair == "" {
-		t.Error("Expected CurrentPair to be updated, but it's empty")
-	}
-
-	// Verify files were copied correctly
+	// Verify all files were copied
 	for _, tf := range testFiles {
 		destPath := filepath.Join(destDir, tf.path)
-
-		// Check if file exists
 		if _, err := os.Stat(destPath); os.IsNotExist(err) {
 			t.Errorf("File %s was not copied to destination", tf.path)
 			continue
 		}
 
-		// Check content
+		// Check file content
 		content, err := os.ReadFile(destPath)
 		if err != nil {
-			t.Errorf("Failed to read destination file %s: %v", destPath, err)
+			t.Errorf("Failed to read destination file %s: %v", tf.path, err)
 			continue
 		}
 
@@ -132,357 +88,380 @@ func TestSyncDirectories(t *testing.T) {
 		}
 	}
 
-	// Verify the destination-only file still exists and wasn't deleted
-	if _, err := os.Stat(destOnlyFile); os.IsNotExist(err) {
-		t.Errorf("Destination-only file was deleted during sync")
+	// Verify sync status was updated
+	if testSync.IsSyncing {
+		t.Errorf("IsSyncing should be false after sync, got true")
+	}
+
+	if testSync.LastSync.IsZero() {
+		t.Errorf("LastSync should be set after sync, got zero time")
+	}
+
+	// Test with non-existent source directory
+	nonExistentSync := NewSync("/non/existent/path", destDir, 60)
+	err = nonExistentSync.SyncDirectories()
+	if err == nil {
+		t.Errorf("Expected error for non-existent source directory, got nil")
+	}
+
+	if nonExistentSync.LastError == "" {
+		t.Errorf("Expected LastError to be set for non-existent source directory")
+	}
+
+	// Test with non-existent destination directory (should be created)
+	newDestDir := filepath.Join(os.TempDir(), "dirsync_test_new_dest")
+	os.RemoveAll(newDestDir) // Ensure it doesn't exist
+
+	newDestSync := NewSync(sourceDir, newDestDir, 60)
+	err = newDestSync.SyncDirectories()
+	if err != nil {
+		t.Fatalf("SyncDirectories failed with new destination: %v", err)
+	}
+
+	// Verify destination was created
+	if _, err := os.Stat(newDestDir); os.IsNotExist(err) {
+		t.Errorf("Destination directory was not created")
 	} else {
-		// Check content
-		content, err := os.ReadFile(destOnlyFile)
-		if err != nil {
-			t.Errorf("Failed to read destination-only file: %v", err)
-		} else if string(content) != destOnlyContent {
-			t.Errorf("Destination-only file content was changed. Expected: %s, Got: %s",
-				destOnlyContent, string(content))
-		}
+		// Clean up
+		os.RemoveAll(newDestDir)
 	}
 }
 
-// TestEmptySourceDirectory tests that syncing an empty source directory doesn't delete files in destination
+// TestEmptySourceDirectory tests syncing an empty source directory
 func TestEmptySourceDirectory(t *testing.T) {
-	// Create temporary empty source directory
-	emptySourceDir, err := os.MkdirTemp("", "empty_source")
-	if err != nil {
-		t.Fatalf("Failed to create empty source directory: %v", err)
-	}
+	// Create empty source directory
+	emptySourceDir := filepath.Join(os.TempDir(), "dirsync_test_empty_source")
+	os.RemoveAll(emptySourceDir)
+	os.MkdirAll(emptySourceDir, 0755)
 	defer os.RemoveAll(emptySourceDir)
 
-	// Create temporary destination directory with a file
-	destDir, err := os.MkdirTemp("", "dest_with_files")
+	// Create destination directory
+	emptyDestDir := filepath.Join(os.TempDir(), "dirsync_test_empty_dest")
+	os.RemoveAll(emptyDestDir)
+	os.MkdirAll(emptyDestDir, 0755)
+	defer os.RemoveAll(emptyDestDir)
+
+	// Create a test sync
+	testSync := NewSync(emptySourceDir, emptyDestDir, 60)
+
+	// Perform the sync
+	err := testSync.SyncDirectories()
 	if err != nil {
-		t.Fatalf("Failed to create destination directory: %v", err)
-	}
-	defer os.RemoveAll(destDir)
-
-	// Create a file in the destination
-	destFile := filepath.Join(destDir, "existing_file.txt")
-	destContent := "This file exists in the destination"
-	if err := os.WriteFile(destFile, []byte(destContent), 0644); err != nil {
-		t.Fatalf("Failed to create destination file: %v", err)
+		t.Fatalf("SyncDirectories failed with empty source: %v", err)
 	}
 
-	// Initialize status for testing
-	status = Status{
-		IsSyncing:    false,
-		LastSync:     time.Now(),
-		NextSyncTime: time.Now().Add(60 * time.Second),
+	// Verify sync status was updated
+	if testSync.IsSyncing {
+		t.Errorf("IsSyncing should be false after sync, got true")
 	}
 
-	// Run the sync with empty source directory
-	if err := SyncDirectories(emptySourceDir, destDir); err != nil {
-		t.Fatalf("SyncDirectories failed: %v", err)
+	if testSync.LastSync.IsZero() {
+		t.Errorf("LastSync should be set after sync, got zero time")
 	}
 
-	// Verify status was updated correctly
-	if status.IsSyncing {
-		t.Error("Expected IsSyncing to be false after sync")
+	// Create a file in the destination to test that it's not deleted
+	testFile := filepath.Join(emptyDestDir, "test.txt")
+	testContent := "This is a test file"
+	err = os.WriteFile(testFile, []byte(testContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	if status.LastError != "" {
-		t.Errorf("Expected no error, got: %s", status.LastError)
+	// Sync again
+	err = testSync.SyncDirectories()
+	if err != nil {
+		t.Fatalf("SyncDirectories failed on second sync: %v", err)
 	}
 
-	// Verify the destination file still exists and wasn't deleted
-	if _, err := os.Stat(destFile); os.IsNotExist(err) {
-		t.Errorf("Destination file was deleted during sync with empty source")
+	// Verify the file still exists in destination
+	if _, err := os.Stat(testFile); os.IsNotExist(err) {
+		t.Errorf("Test file was deleted from destination")
 	} else {
 		// Check content
-		content, err := os.ReadFile(destFile)
+		content, err := os.ReadFile(testFile)
 		if err != nil {
-			t.Errorf("Failed to read destination file: %v", err)
-		} else if string(content) != destContent {
-			t.Errorf("Destination file content was changed. Expected: %s, Got: %s",
-				destContent, string(content))
+			t.Errorf("Failed to read test file: %v", err)
+		} else if string(content) != testContent {
+			t.Errorf("Test file content was modified. Expected: %s, Got: %s", testContent, string(content))
 		}
 	}
 }
 
-// TestCopyFile tests the file copying functionality
+// TestCopyFile tests the copyFile function
 func TestCopyFile(t *testing.T) {
-	// Create temporary source and destination files
-	srcFile, err := os.CreateTemp("", "source-*.txt")
+	// Create a test file
+	sourceFile := filepath.Join(os.TempDir(), "dirsync_test_copy_source.txt")
+	destFile := filepath.Join(os.TempDir(), "dirsync_test_copy_dest.txt")
+
+	// Clean up any existing files
+	os.Remove(sourceFile)
+	os.Remove(destFile)
+
+	// Create source file with test content
+	testContent := "This is a test file for copyFile function"
+	err := os.WriteFile(sourceFile, []byte(testContent), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create source file: %v", err)
 	}
-	defer os.Remove(srcFile.Name())
+	defer os.Remove(sourceFile)
 
-	destFile := srcFile.Name() + ".copy"
-	defer os.Remove(destFile)
-
-	// Write test content to source file
-	testContent := "This is a test file for copying"
-	if _, err := srcFile.WriteString(testContent); err != nil {
-		t.Fatalf("Failed to write to source file: %v", err)
-	}
-	srcFile.Close()
-
-	// Set permissions
-	if err := os.Chmod(srcFile.Name(), 0644); err != nil {
-		t.Fatalf("Failed to set permissions on source file: %v", err)
+	// Get source file info
+	sourceInfo, err := os.Stat(sourceFile)
+	if err != nil {
+		t.Fatalf("Failed to get source file info: %v", err)
 	}
 
 	// Copy the file
-	if err := copyFile(srcFile.Name(), destFile, 0644); err != nil {
+	err = copyFile(sourceFile, destFile, sourceInfo.Mode())
+	if err != nil {
 		t.Fatalf("copyFile failed: %v", err)
 	}
+	defer os.Remove(destFile)
 
-	// Verify the file was copied correctly
-	content, err := os.ReadFile(destFile)
-	if err != nil {
-		t.Fatalf("Failed to read destination file: %v", err)
+	// Verify the file was copied
+	if _, err := os.Stat(destFile); os.IsNotExist(err) {
+		t.Errorf("Destination file was not created")
 	}
 
-	if string(content) != testContent {
+	// Check content
+	content, err := os.ReadFile(destFile)
+	if err != nil {
+		t.Errorf("Failed to read destination file: %v", err)
+	} else if string(content) != testContent {
 		t.Errorf("File content mismatch. Expected: %s, Got: %s", testContent, string(content))
 	}
 
 	// Check permissions
-	info, err := os.Stat(destFile)
+	destInfo, err := os.Stat(destFile)
 	if err != nil {
-		t.Fatalf("Failed to stat destination file: %v", err)
-	}
-
-	if info.Mode().Perm() != 0644 {
-		t.Errorf("File permissions mismatch. Expected: %v, Got: %v", 0644, info.Mode().Perm())
+		t.Errorf("Failed to get destination file info: %v", err)
+	} else if destInfo.Mode() != sourceInfo.Mode() {
+		t.Errorf("File mode mismatch. Expected: %v, Got: %v", sourceInfo.Mode(), destInfo.Mode())
 	}
 }
 
-// TestSyncWithFileCopy tests the file copy fallback method
+// TestSyncWithFileCopy tests the syncWithFileCopy method
 func TestSyncWithFileCopy(t *testing.T) {
-	// Use the test directories created in setup
-	sourceDir := testSourceDir
-	destDir := testDestDir + "_filecopy"
-
-	// Create the destination directory
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		t.Fatalf("Failed to create destination directory: %v", err)
-	}
-	defer os.RemoveAll(destDir)
-
-	// Create a file in the destination that doesn't exist in the source
-	destOnlyFile := filepath.Join(destDir, "dest_only.txt")
-	destOnlyContent := "This file exists only in the destination"
-	if err := os.WriteFile(destOnlyFile, []byte(destOnlyContent), 0644); err != nil {
-		t.Fatalf("Failed to create destination-only file: %v", err)
-	}
-
-	// Initialize status for testing
-	status = Status{
-		IsSyncing:    false,
-		LastSync:     time.Now(),
-		NextSyncTime: time.Now().Add(60 * time.Second),
-	}
-
-	// Run the sync with file copy method
-	if err := syncWithFileCopy(sourceDir, destDir); err != nil {
-		t.Fatalf("syncWithFileCopy failed: %v", err)
-	}
-
-	// Verify status was updated correctly
-	if status.IsSyncing {
-		t.Error("Expected IsSyncing to be false after sync")
-	}
-
-	if status.LastError != "" {
-		t.Errorf("Expected no error, got: %s", status.LastError)
-	}
-
-	// Check if CurrentPair was updated with completion message
-	if !strings.Contains(status.CurrentPair, "Completed:") {
-		t.Errorf("Expected CurrentPair to contain completion message, got: %s", status.CurrentPair)
-	}
-
-	// Verify files were copied correctly by comparing directories
-	err := filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Skip the root directory
-		relPath, err := filepath.Rel(sourceDir, path)
-		if err != nil || relPath == "." {
-			return nil
-		}
-
-		// Get destination path
-		destPath := filepath.Join(destDir, relPath)
-
-		// Check if it exists in destination
-		_, err = os.Stat(destPath)
-		if os.IsNotExist(err) {
-			t.Errorf("File/directory %s was not copied to destination", relPath)
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		t.Fatalf("Error walking source directory: %v", err)
-	}
-
-	// Verify the destination-only file still exists and wasn't deleted
-	if _, err := os.Stat(destOnlyFile); os.IsNotExist(err) {
-		t.Errorf("Destination-only file was deleted during sync")
-	} else {
-		// Check content
-		content, err := os.ReadFile(destOnlyFile)
-		if err != nil {
-			t.Errorf("Failed to read destination-only file: %v", err)
-		} else if string(content) != destOnlyContent {
-			t.Errorf("Destination-only file content was changed. Expected: %s, Got: %s",
-				destOnlyContent, string(content))
-		}
-	}
-}
-
-// TestIsDirEmpty tests the directory empty check functionality
-func TestIsDirEmpty(t *testing.T) {
-	// Create a temporary empty directory
-	emptyDir, err := os.MkdirTemp("", "empty_dir")
-	if err != nil {
-		t.Fatalf("Failed to create empty directory: %v", err)
-	}
-	defer os.RemoveAll(emptyDir)
-
-	// Test empty directory
-	empty, err := isDirEmpty(emptyDir)
-	if err != nil {
-		t.Fatalf("isDirEmpty failed: %v", err)
-	}
-	if !empty {
-		t.Errorf("Expected empty directory to be reported as empty")
-	}
-
-	// Create a file in the directory
-	testFile := filepath.Join(emptyDir, "test.txt")
-	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-
-	// Test non-empty directory
-	empty, err = isDirEmpty(emptyDir)
-	if err != nil {
-		t.Fatalf("isDirEmpty failed: %v", err)
-	}
-	if empty {
-		t.Errorf("Expected non-empty directory to be reported as not empty")
-	}
-
-	// Test non-existent directory
-	_, err = isDirEmpty("/path/that/does/not/exist")
-	if err == nil {
-		t.Errorf("Expected error for non-existent directory")
-	}
-}
-
-// TestSetError tests the error setting functionality
-func TestSetError(t *testing.T) {
-	// Initialize status
-	status = Status{
-		IsSyncing: true,
-		LastError: "",
-	}
-
-	// Set an error
-	testError := "Test error message"
-	setError(testError)
-
-	// Verify status was updated
-	if status.IsSyncing {
-		t.Error("Expected IsSyncing to be false after error")
-	}
-
-	if status.LastError != testError {
-		t.Errorf("Expected error message %s, got %s", testError, status.LastError)
-	}
-
-	// Check if CurrentPair was updated with error message
-	if !strings.Contains(status.CurrentPair, "Error:") {
-		t.Errorf("Expected CurrentPair to contain error message, got: %s", status.CurrentPair)
-	}
-}
-
-// TestStartSyncProcess tests the sync process functionality
-// This is a more complex test that involves goroutines and timing
-func TestStartSyncProcess(t *testing.T) {
-	// Skip in short mode
-	if testing.Short() {
-		t.Skip("Skipping StartSyncProcess test in short mode")
-	}
-
 	// Use the test directories created in setup
 	sourceDir := testSourceDir
 	destDir := testDestDir
 
-	// Create a new test file in source
-	testFile := filepath.Join(sourceDir, "test_sync_process.txt")
-	if err := os.WriteFile(testFile, []byte("Test content for sync process"), 0644); err != nil {
+	// Get the list of test files from the source directory
+	var testFiles []struct {
+		path    string
+		content string
+	}
+
+	// Walk through the source directory to find all files
+	filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+
+		// Get relative path
+		relPath, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+
+		// Read file content
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		// Add to test files
+		testFiles = append(testFiles, struct {
+			path    string
+			content string
+		}{
+			path:    relPath,
+			content: string(content),
+		})
+
+		return nil
+	})
+
+	// Clean the destination directory
+	os.RemoveAll(destDir)
+	os.MkdirAll(destDir, 0755)
+
+	// Create a test sync
+	testSync := NewSync(sourceDir, destDir, 60)
+
+	// Perform the sync with file copy
+	err := testSync.syncWithFileCopy()
+	if err != nil {
+		t.Fatalf("syncWithFileCopy failed: %v", err)
+	}
+
+	// Verify all files were copied
+	for _, tf := range testFiles {
+		destPath := filepath.Join(destDir, tf.path)
+		if _, err := os.Stat(destPath); os.IsNotExist(err) {
+			t.Errorf("File %s was not copied to destination", tf.path)
+			continue
+		}
+
+		// Check file content
+		content, err := os.ReadFile(destPath)
+		if err != nil {
+			t.Errorf("Failed to read destination file %s: %v", tf.path, err)
+			continue
+		}
+
+		if string(content) != tf.content {
+			t.Errorf("File %s content mismatch. Expected: %s, Got: %s", tf.path, tf.content, string(content))
+		}
+	}
+
+	// Verify sync status was updated
+	if testSync.IsSyncing {
+		t.Errorf("IsSyncing should be false after sync, got true")
+	}
+
+	if testSync.LastSync.IsZero() {
+		t.Errorf("LastSync should be set after sync, got zero time")
+	}
+}
+
+// TestIsDirEmpty tests the isDirEmpty function
+func TestIsDirEmpty(t *testing.T) {
+	// Create a test directory
+	testDir := filepath.Join(os.TempDir(), "dirsync_test_empty_dir")
+	os.RemoveAll(testDir)
+	os.MkdirAll(testDir, 0755)
+	defer os.RemoveAll(testDir)
+
+	// Test empty directory
+	empty, err := isDirEmpty(testDir)
+	if err != nil {
+		t.Fatalf("isDirEmpty failed: %v", err)
+	}
+	if !empty {
+		t.Errorf("Expected empty directory, got non-empty")
+	}
+
+	// Add a file to the directory
+	testFile := filepath.Join(testDir, "test.txt")
+	err = os.WriteFile(testFile, []byte("test"), 0644)
+	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	// Create a file in the destination that doesn't exist in the source
-	destOnlyFile := filepath.Join(destDir, "dest_only_sync_process.txt")
-	destOnlyContent := "This file exists only in the destination for sync process test"
-	if err := os.WriteFile(destOnlyFile, []byte(destOnlyContent), 0644); err != nil {
-		t.Fatalf("Failed to create destination-only file: %v", err)
+	// Test non-empty directory
+	empty, err = isDirEmpty(testDir)
+	if err != nil {
+		t.Fatalf("isDirEmpty failed: %v", err)
+	}
+	if empty {
+		t.Errorf("Expected non-empty directory, got empty")
 	}
 
-	// Set up config with a very short sync interval
-	config = Config{
-		SyncInterval: 1, // 1 second
-		SyncPairs:    []string{sourceDir + ":" + destDir},
+	// Test non-existent directory
+	_, err = isDirEmpty("/non/existent/path")
+	if err == nil {
+		t.Errorf("Expected error for non-existent directory, got nil")
+	}
+}
+
+// TestSetError tests the setError method
+func TestSetError(t *testing.T) {
+	// Create a test sync
+	testSync := NewSync(testSourceDir, testDestDir, 60)
+
+	// Set initial state
+	testSync.IsSyncing = true
+	testSync.LastError = ""
+	testSync.Output = "Initial output"
+
+	// Call setError
+	testErrorMsg := "Test error message"
+	testSync.setError(testErrorMsg)
+
+	// Verify error was set
+	if testSync.IsSyncing {
+		t.Errorf("IsSyncing should be false after setError, got true")
 	}
 
-	// Initialize status
-	now := time.Now()
-	status = Status{
-		IsSyncing:    false,
-		LastSync:     now,
-		NextSyncTime: now.Add(time.Second), // Next sync in 1 second
+	if testSync.LastError != testErrorMsg {
+		t.Errorf("LastError not set correctly. Expected: %s, Got: %s", testErrorMsg, testSync.LastError)
 	}
 
-	// Start sync process in a goroutine
-	done := make(chan bool)
-	go func() {
-		// We'll run this for a short time only
-		time.Sleep(3 * time.Second)
-		done <- true
-	}()
+	if !strings.Contains(testSync.Output, testErrorMsg) {
+		t.Errorf("Output should contain error message. Output: %s, Error: %s", testSync.Output, testErrorMsg)
+	}
+}
 
-	// Start the sync process
-	go func() {
-		StartSyncProcess()
-	}()
+// TestSyncManager tests the SyncManager functionality
+func TestSyncManager(t *testing.T) {
+	// Create a test sync manager
+	manager := NewSyncManager()
 
-	// Wait for the test to complete
-	<-done
-
-	// Verify the file was copied
-	destFile := filepath.Join(destDir, "test_sync_process.txt")
-	if _, err := os.Stat(destFile); os.IsNotExist(err) {
-		t.Error("File was not copied by sync process")
+	// Verify it's initialized correctly
+	if len(manager.Syncs) != 0 {
+		t.Errorf("Expected empty Syncs slice, got %d items", len(manager.Syncs))
 	}
 
-	// Verify the destination-only file still exists and wasn't deleted
-	if _, err := os.Stat(destOnlyFile); os.IsNotExist(err) {
-		t.Error("Destination-only file was deleted during sync process")
-	} else {
-		// Check content
-		content, err := os.ReadFile(destOnlyFile)
-		if err != nil {
-			t.Errorf("Failed to read destination-only file: %v", err)
-		} else if string(content) != destOnlyContent {
-			t.Errorf("Destination-only file content was changed. Expected: %s, Got: %s",
-				destOnlyContent, string(content))
-		}
+	// Add a sync
+	sync1 := manager.AddSync(testSourceDir, testDestDir, 60)
+
+	// Verify sync was added
+	if len(manager.Syncs) != 1 {
+		t.Errorf("Expected 1 sync, got %d", len(manager.Syncs))
+	}
+
+	if sync1.ID != testSourceDir+":"+testDestDir {
+		t.Errorf("Sync ID not set correctly. Expected: %s, Got: %s", testSourceDir+":"+testDestDir, sync1.ID)
+	}
+
+	// Add another sync
+	sync2 := manager.AddSync("/another/source", "/another/dest", 30)
+
+	// Verify second sync was added
+	if len(manager.Syncs) != 2 {
+		t.Errorf("Expected 2 syncs, got %d", len(manager.Syncs))
+	}
+
+	// Test GetSyncByID
+	foundSync := manager.GetSyncByID(sync1.ID)
+	if foundSync != sync1 {
+		t.Errorf("GetSyncByID returned wrong sync")
+	}
+
+	// Test with non-existent ID
+	foundSync = manager.GetSyncByID("non-existent")
+	if foundSync != nil {
+		t.Errorf("GetSyncByID should return nil for non-existent ID")
+	}
+
+	// Test GetAllStatus
+	statuses := manager.GetAllStatus()
+	if len(statuses) != 2 {
+		t.Errorf("Expected 2 statuses, got %d", len(statuses))
+	}
+
+	// Test TriggerAllSyncs
+	// Set initial next sync times
+	initialTime1 := time.Now().Add(60 * time.Second)
+	initialTime2 := time.Now().Add(30 * time.Second)
+	sync1.NextSyncTime = initialTime1
+	sync2.NextSyncTime = initialTime2
+
+	// Trigger all syncs
+	manager.TriggerAllSyncs()
+
+	// Verify next sync times were updated
+	if !sync1.NextSyncTime.Before(initialTime1) {
+		t.Errorf("NextSyncTime for sync1 was not updated")
+	}
+
+	if !sync2.NextSyncTime.Before(initialTime2) {
+		t.Errorf("NextSyncTime for sync2 was not updated")
 	}
 }

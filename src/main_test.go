@@ -42,8 +42,8 @@ func TestConfigLoading(t *testing.T) {
 	}
 }
 
-// TestStatusInitialization tests the initialization of the status struct
-func TestStatusInitialization(t *testing.T) {
+// TestSyncInitialization tests the initialization of the Sync struct
+func TestSyncInitialization(t *testing.T) {
 	// Load the test config
 	configFile, err := os.ReadFile("test_config.json")
 	if err != nil {
@@ -54,22 +54,34 @@ func TestStatusInitialization(t *testing.T) {
 		t.Fatalf("Error parsing config: %v", err)
 	}
 
-	// Initialize status with the test config
-	now := time.Now()
-	testStatus := Status{
-		IsSyncing:    false,
-		LastSync:     now,
-		NextSyncTime: now.Add(time.Duration(config.SyncInterval) * time.Second),
+	// Initialize a test sync
+	sourcePath := testSourceDir
+	destPath := testDestDir
+	interval := config.SyncInterval
+
+	testSync := NewSync(sourcePath, destPath, interval)
+
+	// Verify sync initialization
+	if testSync.IsSyncing != false {
+		t.Errorf("Expected IsSyncing to be false, got %v", testSync.IsSyncing)
 	}
 
-	// Verify status initialization
-	if testStatus.IsSyncing != false {
-		t.Errorf("Expected IsSyncing to be false, got %v", testStatus.IsSyncing)
+	if testSync.SourcePath != sourcePath {
+		t.Errorf("Expected SourcePath %s, got %s", sourcePath, testSync.SourcePath)
+	}
+
+	if testSync.DestinationPath != destPath {
+		t.Errorf("Expected DestinationPath %s, got %s", destPath, testSync.DestinationPath)
+	}
+
+	expectedID := sourcePath + ":" + destPath
+	if testSync.ID != expectedID {
+		t.Errorf("Expected ID %s, got %s", expectedID, testSync.ID)
 	}
 
 	// Allow a small time difference due to execution time
-	timeDiff := testStatus.NextSyncTime.Sub(testStatus.LastSync)
-	expectedDiff := time.Duration(config.SyncInterval) * time.Second
+	timeDiff := testSync.NextSyncTime.Sub(time.Now())
+	expectedDiff := time.Duration(interval) * time.Second
 	if timeDiff < expectedDiff-time.Second || timeDiff > expectedDiff+time.Second {
 		t.Errorf("Expected time difference of %v, got %v", expectedDiff, timeDiff)
 	}
@@ -77,15 +89,24 @@ func TestStatusInitialization(t *testing.T) {
 
 // TestHandleStatus tests the status HTTP handler
 func TestHandleStatus(t *testing.T) {
-	// Set up test status
+	// Set up test sync manager
+	testSyncManager := NewSyncManager()
+	syncManager = testSyncManager
+
+	// Add a test sync
 	testTime := time.Now()
-	status = Status{
-		IsSyncing:    true,
-		LastSync:     testTime,
-		NextSyncTime: testTime.Add(60 * time.Second),
-		CurrentPair:  testSourceDir + ":" + testDestDir,
-		LastError:    "test error",
+	testSync := &Sync{
+		ID:              testSourceDir + ":" + testDestDir,
+		SourcePath:      testSourceDir,
+		DestinationPath: testDestDir,
+		IsSyncing:       true,
+		LastSync:        testTime,
+		NextSyncTime:    testTime.Add(60 * time.Second),
+		Output:          "test output",
+		LastError:       "test error",
 	}
+
+	testSyncManager.Syncs = append(testSyncManager.Syncs, testSync)
 
 	// Create a request to pass to our handler
 	req, err := http.NewRequest("GET", "/status", nil)
@@ -112,35 +133,50 @@ func TestHandleStatus(t *testing.T) {
 	}
 
 	// Check the response body
-	var responseStatus Status
-	if err := json.NewDecoder(rr.Body).Decode(&responseStatus); err != nil {
+	var responseStatuses []map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&responseStatuses); err != nil {
 		t.Fatalf("Failed to decode response body: %v", err)
 	}
 
-	if responseStatus.IsSyncing != status.IsSyncing {
-		t.Errorf("Expected IsSyncing %v, got %v", status.IsSyncing, responseStatus.IsSyncing)
+	if len(responseStatuses) != 1 {
+		t.Fatalf("Expected 1 sync status, got %d", len(responseStatuses))
 	}
 
-	if responseStatus.CurrentPair != status.CurrentPair {
-		t.Errorf("Expected CurrentPair %s, got %s", status.CurrentPair, responseStatus.CurrentPair)
+	responseStatus := responseStatuses[0]
+
+	if isSyncing, ok := responseStatus["is_syncing"].(bool); !ok || isSyncing != testSync.IsSyncing {
+		t.Errorf("Expected IsSyncing %v, got %v", testSync.IsSyncing, responseStatus["is_syncing"])
 	}
 
-	if responseStatus.LastError != status.LastError {
-		t.Errorf("Expected LastError %s, got %s", status.LastError, responseStatus.LastError)
+	if id, ok := responseStatus["id"].(string); !ok || id != testSync.ID {
+		t.Errorf("Expected ID %s, got %s", testSync.ID, responseStatus["id"])
+	}
+
+	if lastError, ok := responseStatus["last_error"].(string); !ok || lastError != testSync.LastError {
+		t.Errorf("Expected LastError %s, got %s", testSync.LastError, responseStatus["last_error"])
 	}
 }
 
 // TestHandleSyncNow tests the manual sync trigger endpoint
 func TestHandleSyncNow(t *testing.T) {
-	// Set up initial status
+	// Set up test sync manager
+	testSyncManager := NewSyncManager()
+	syncManager = testSyncManager
+
+	// Add a test sync
 	initialTime := time.Now().Add(60 * time.Second) // Next sync in 60 seconds
-	status = Status{
-		IsSyncing:    false,
-		LastSync:     time.Now().Add(-60 * time.Second), // Last sync was 60 seconds ago
-		NextSyncTime: initialTime,
-		CurrentPair:  "",
-		LastError:    "",
+	testSync := &Sync{
+		ID:              testSourceDir + ":" + testDestDir,
+		SourcePath:      testSourceDir,
+		DestinationPath: testDestDir,
+		IsSyncing:       false,
+		LastSync:        time.Now().Add(-60 * time.Second), // Last sync was 60 seconds ago
+		NextSyncTime:    initialTime,
+		Output:          "",
+		LastError:       "",
 	}
+
+	testSyncManager.Syncs = append(testSyncManager.Syncs, testSync)
 
 	// Create a POST request to the sync now endpoint
 	req, err := http.NewRequest("POST", "/api/sync/now", nil)
@@ -178,8 +214,8 @@ func TestHandleSyncNow(t *testing.T) {
 	}
 
 	// Verify the next sync time was updated to now (or very close to now)
-	if time.Since(status.NextSyncTime) > 2*time.Second {
-		t.Errorf("Expected NextSyncTime to be updated to now, but it's %v in the past", time.Since(status.NextSyncTime))
+	if time.Since(testSync.NextSyncTime) > 2*time.Second {
+		t.Errorf("Expected NextSyncTime to be updated to now, but it's %v in the past", time.Since(testSync.NextSyncTime))
 	}
 
 	// Test with wrong HTTP method
@@ -197,6 +233,89 @@ func TestHandleSyncNow(t *testing.T) {
 	}
 }
 
+// TestHandleSyncDetails tests the sync details endpoint
+func TestHandleSyncDetails(t *testing.T) {
+	// Set up test sync manager
+	testSyncManager := NewSyncManager()
+	syncManager = testSyncManager
+
+	// Add a test sync
+	testSync := &Sync{
+		ID:              testSourceDir + ":" + testDestDir,
+		SourcePath:      testSourceDir,
+		DestinationPath: testDestDir,
+		IsSyncing:       false,
+		LastSync:        time.Now(),
+		NextSyncTime:    time.Now().Add(60 * time.Second),
+		Output:          "test output content",
+		LastError:       "",
+	}
+
+	testSyncManager.Syncs = append(testSyncManager.Syncs, testSync)
+
+	// Create a request to the sync details endpoint
+	req, err := http.NewRequest("GET", "/api/sync/details?id="+testSync.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a ResponseRecorder to record the response
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(handleSyncDetails)
+
+	// Call the handler
+	handler.ServeHTTP(rr, req)
+
+	// Check the status code
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusOK)
+	}
+
+	// Check the content type
+	expectedContentType := "application/json"
+	if contentType := rr.Header().Get("Content-Type"); contentType != expectedContentType {
+		t.Errorf("handler returned wrong content type: got %v want %v", contentType, expectedContentType)
+	}
+
+	// Check the response body
+	var responseStatus map[string]interface{}
+	if err := json.NewDecoder(rr.Body).Decode(&responseStatus); err != nil {
+		t.Fatalf("Failed to decode response body: %v", err)
+	}
+
+	if output, ok := responseStatus["output"].(string); !ok || output != testSync.Output {
+		t.Errorf("Expected Output %s, got %s", testSync.Output, responseStatus["output"])
+	}
+
+	// Test with missing ID
+	req, err = http.NewRequest("GET", "/api/sync/details", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	// Should return bad request
+	if status := rr.Code; status != http.StatusBadRequest {
+		t.Errorf("handler should return bad request for missing ID, got %v", status)
+	}
+
+	// Test with non-existent ID
+	req, err = http.NewRequest("GET", "/api/sync/details?id=nonexistent", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	// Should return not found
+	if status := rr.Code; status != http.StatusNotFound {
+		t.Errorf("handler should return not found for non-existent ID, got %v", status)
+	}
+}
+
 // TestIntegration performs an integration test of the entire application flow
 func TestIntegration(t *testing.T) {
 	// Skip in short mode
@@ -208,6 +327,8 @@ func TestIntegration(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/status" {
 			handleStatus(w, r)
+		} else if r.URL.Path == "/api/sync/details" {
+			handleSyncDetails(w, r)
 		}
 	}))
 	defer ts.Close()
@@ -222,12 +343,13 @@ func TestIntegration(t *testing.T) {
 		t.Fatalf("Error parsing config: %v", err)
 	}
 
-	// Initialize status
-	status = Status{
-		IsSyncing:    false,
-		LastSync:     time.Now(),
-		NextSyncTime: time.Now().Add(time.Duration(config.SyncInterval) * time.Second),
-	}
+	// Initialize sync manager
+	testSyncManager := NewSyncManager()
+	syncManager = testSyncManager
+
+	// Add a test sync
+	testSync := NewSync(testSourceDir, testDestDir, config.SyncInterval)
+	testSyncManager.Syncs = append(testSyncManager.Syncs, testSync)
 
 	// Make a request to the status endpoint
 	resp, err := http.Get(ts.URL + "/status")
@@ -246,12 +368,18 @@ func TestIntegration(t *testing.T) {
 		t.Fatalf("Failed to read response body: %v", err)
 	}
 
-	var responseStatus Status
-	if err := json.Unmarshal(body, &responseStatus); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
+	var responseStatuses []map[string]interface{}
+	if err := json.Unmarshal(body, &responseStatuses); err != nil {
+		t.Fatalf("Failed to unmarshal response body: %v", err)
 	}
 
-	if responseStatus.IsSyncing != status.IsSyncing {
-		t.Errorf("Expected IsSyncing %v, got %v", status.IsSyncing, responseStatus.IsSyncing)
+	if len(responseStatuses) != 1 {
+		t.Fatalf("Expected 1 sync status, got %d", len(responseStatuses))
+	}
+
+	responseStatus := responseStatuses[0]
+
+	if id, ok := responseStatus["id"].(string); !ok || id != testSync.ID {
+		t.Errorf("Expected ID %s, got %s", testSync.ID, responseStatus["id"])
 	}
 }
